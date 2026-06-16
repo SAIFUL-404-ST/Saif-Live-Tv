@@ -358,10 +358,41 @@ const FALLBACK_LOGO='https://placehold.co/60x60/1a1a22/ffd700?text=TV';
 const RECENT_KEY='saif_recent_v2',NAME_KEY='saif_username';
 let allChannels=[],currentCat='all',activeChannel=null,hlsInstance=null;
 let userName=localStorage.getItem(NAME_KEY);
-let onlineNodeRef=null,actNodeRef=null,chPresNodeRef=null;
+let onlineNodeRef=null,chPresNodeRef=null;
 let chatRef=null,chatListener=null,viewerRef=null;
 
 document.getElementById('nameInput').addEventListener('keypress',e=>{if(e.key==='Enter')submitName();});
+
+// ===== DEBUG BANNER (shows real Firebase errors on-screen so they're visible on mobile) =====
+let debugBannerTimeout;
+function showDebugError(msg){
+  console.error('[Firebase]',msg);
+  let b=document.getElementById('fbDebugBanner');
+  if(!b){
+    b=document.createElement('div');
+    b.id='fbDebugBanner';
+    b.style.cssText='position:fixed;bottom:10px;left:10px;right:10px;z-index:9999;background:#7f1d1d;color:#fff;padding:10px 14px;border-radius:10px;font-size:.7rem;line-height:1.4;box-shadow:0 6px 20px rgba(0,0,0,.5);';
+    document.body.appendChild(b);
+  }
+  b.textContent='⚠️ Firebase error: '+msg;
+  b.style.display='block';
+  clearTimeout(debugBannerTimeout);
+  debugBannerTimeout=setTimeout(()=>{b.style.display='none';},10000);
+}
+
+// Counts a visit exactly once per browser session (not on every reconnect)
+function countVisitOnce(){
+  if(sessionStorage.getItem('saif_visit_counted'))return;
+  sessionStorage.setItem('saif_visit_counted','1');
+  db.ref('stats/totalVisitors').transaction(v=>(v||0)+1,(err)=>{
+    if(err)showDebugError('visitor count failed: '+err.message);
+  });
+}
+// Permanent activity log entry (never auto-deleted on disconnect)
+function logActivity(action){
+  db.ref('activities').push({name:userName,action,ts:firebase.database.ServerValue.TIMESTAMP})
+    .catch(e=>showDebugError('activity log failed: '+e.message));
+}
 
 function submitName(){
   const val=document.getElementById('nameInput').value.trim();
@@ -369,17 +400,16 @@ function submitName(){
   if(!val||val.length<2){err.textContent='Please enter at least 2 characters.';err.style.display='block';return;}
   err.style.display='none';
   userName=val;localStorage.setItem(NAME_KEY,val);
-  db.ref('visitors').push({name:val,ts:firebase.database.ServerValue.TIMESTAMP});
   document.getElementById('nameModal').style.display='none';
   document.getElementById('app').style.display='block';
   document.getElementById('welcomeUser').innerHTML=`স্বাগতম, <strong>${val}</strong>`;
-  initFirebaseListeners();loadM3U();
+  initFirebaseListeners();countVisitOnce();logActivity('visited');loadM3U();
 }
 if(userName){
   document.getElementById('nameModal').style.display='none';
   document.getElementById('app').style.display='block';
   document.getElementById('welcomeUser').innerHTML=`স্বাগতম, <strong>${userName}</strong>`;
-  initFirebaseListeners();loadM3U();
+  initFirebaseListeners();countVisitOnce();logActivity('visited');loadM3U();
 }
 
 function initFirebaseListeners(){
@@ -387,12 +417,9 @@ function initFirebaseListeners(){
     if(!snap.val())return;
     if(onlineNodeRef)onlineNodeRef.remove();
     onlineNodeRef=db.ref('online').push({name:userName,ts:firebase.database.ServerValue.TIMESTAMP});
+    onlineNodeRef.catch(e=>showDebugError('presence write failed: '+e.message));
     onlineNodeRef.onDisconnect().remove();
-    db.ref('stats/totalVisitors').transaction(v=>(v||0)+1);
-    if(actNodeRef)actNodeRef.remove();
-    actNodeRef=db.ref('activities').push({name:userName,action:'visited',ts:firebase.database.ServerValue.TIMESTAMP});
-    actNodeRef.onDisconnect().remove();
-  });
+  },err=>showDebugError('connection listener failed: '+err.message));
   db.ref('online').on('value',snap=>{
     const c=snap.numChildren();
     document.getElementById('onlineBadge').textContent=c+' Online';
@@ -401,18 +428,18 @@ function initFirebaseListeners(){
     document.getElementById('adOnlineCount').textContent=c;
     const list=[];snap.forEach(ch=>{if(ch.val()?.name)list.push(ch.val().name);});
     document.getElementById('adOnlineList').innerHTML=list.length?list.map(n=>`<span class="online-name">${n}</span>`).join(''):'<span style="color:rgba(255,255,255,.2);font-size:.72rem;">কেউ নেই</span>';
-  });
+  },err=>showDebugError('online read failed: '+err.message));
   db.ref('stats/totalVisitors').on('value',snap=>{
     const v=snap.val()||0;
     document.getElementById('totalVisitors').textContent=v;
     document.getElementById('adTotal').textContent=v.toLocaleString();
-  });
+  },err=>showDebugError('stats read failed: '+err.message));
   db.ref('activities').limitToLast(20).on('value',snap=>{
     const acts=[];snap.forEach(c=>{if(c.val())acts.push(c.val());});acts.reverse();
     const cont=document.getElementById('adActivities');
     if(!acts.length){cont.innerHTML='<span style="color:rgba(255,255,255,.2);font-size:.72rem;">কোনো activity নেই</span>';return;}
     cont.innerHTML=acts.map(a=>`<div class="act-row"><div class="act-avatar">${(a.name||'?')[0].toUpperCase()}</div><span class="act-text"><strong>${a.name||'?'}</strong> ${a.action||''}</span>${a.ts?`<span class="act-time">${new Date(a.ts).toLocaleTimeString('bn-BD',{hour:'2-digit',minute:'2-digit'})}</span>`:''}</div>`).join('');
-  });
+  },err=>showDebugError('activities read failed: '+err.message));
   db.ref('chat').on('value',snap=>{
     let total=0;const counts={};
     snap.forEach(ch=>{counts[ch.key]=ch.numChildren();total+=ch.numChildren();});
@@ -421,7 +448,7 @@ function initFirebaseListeners(){
     const entries=Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,9);
     if(!entries.length){cont.innerHTML='<span style="color:rgba(255,255,255,.2);font-size:.72rem;">কোনো চ্যাট নেই</span>';return;}
     cont.innerHTML=entries.map(([k,v])=>`<div style="background:var(--card2);border-radius:10px;padding:9px;display:flex;align-items:center;justify-content:space-between;"><span style="font-size:.65rem;color:rgba(255,255,255,.55);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:6px;">${k.replace(/_/g,' ')}</span><span style="color:var(--gold);font-size:.75rem;font-weight:900;">${v}</span></div>`).join('');
-  });
+  },err=>showDebugError('chat stats read failed: '+err.message));
   db.ref('channelViewers').on('value',snap=>{
     const stats=[];snap.forEach(ch=>stats.push({name:ch.key.replace(/_/g,' '),viewers:ch.numChildren()}));
     stats.sort((a,b)=>b.viewers-a.viewers);
@@ -429,7 +456,7 @@ function initFirebaseListeners(){
     const cont=document.getElementById('adChStats');
     if(!stats.length){cont.innerHTML='<span style="color:rgba(255,255,255,.2);font-size:.72rem;">কোনো ডেটা নেই</span>';return;}
     cont.innerHTML=stats.slice(0,8).map(s=>`<div class="ch-stat-row"><span style="color:rgba(255,255,255,.65);flex:1;margin-right:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.name}</span><div class="ch-stat-bar"><div class="ch-stat-fill" style="width:${Math.min(100,s.viewers*25)}%"></div></div><span class="ch-stat-num">${s.viewers}</span></div>`).join('');
-  });
+  },err=>showDebugError('channel viewers read failed: '+err.message));
 }
 
 const ADMIN_KEY='livetv71';
@@ -537,10 +564,10 @@ function setupChat(channelName){
   document.getElementById('chatMessages').innerHTML='<p class="chat-empty">এখনো কোনো মেসেজ নেই</p>';
   if(chatRef&&chatListener)chatRef.off('value',chatListener);
   chatRef=db.ref(`chat/${key}`).orderByChild('ts').limitToLast(50);
-  chatListener=chatRef.on('value',snap=>{const msgs=[];snap.forEach(c=>msgs.push({id:c.key,...c.val()}));renderMessages(msgs);});
+  chatListener=chatRef.on('value',snap=>{const msgs=[];snap.forEach(c=>msgs.push({id:c.key,...c.val()}));renderMessages(msgs);},err=>showDebugError('chat read failed: '+err.message));
   if(viewerRef)viewerRef.off('value');
   viewerRef=db.ref(`channelViewers/${key}`);
-  viewerRef.on('value',snap=>{document.getElementById('chatViewers').textContent=snap.numChildren()+' জন দেখছে';});
+  viewerRef.on('value',snap=>{document.getElementById('chatViewers').textContent=snap.numChildren()+' জন দেখছে';},err=>showDebugError('viewer count failed: '+err.message));
 }
 
 function renderMessages(msgs){
@@ -555,7 +582,8 @@ function sendChat(e){
   const inp=document.getElementById('chatInput'),text=inp.value.trim();
   if(!text||!activeChannel)return;
   const key=activeChannel.name.replace(/[.#$[\]/]/g,'_');
-  db.ref(`chat/${key}`).push({name:userName,text,ts:firebase.database.ServerValue.TIMESTAMP});
+  db.ref(`chat/${key}`).push({name:userName,text,ts:firebase.database.ServerValue.TIMESTAMP})
+    .catch(e=>showDebugError('chat send failed: '+e.message));
   inp.value='';
 }
 
@@ -565,6 +593,7 @@ function setChannelPresence(channelName){
   if(chPresNodeRef){chPresNodeRef.remove();chPresNodeRef=null;}
   const key=channelName.replace(/[.#$[\]/]/g,'_');
   chPresNodeRef=db.ref(`channelViewers/${key}`).push({name:userName,ts:firebase.database.ServerValue.TIMESTAMP});
+  chPresNodeRef.catch(e=>showDebugError('channel presence failed: '+e.message));
   chPresNodeRef.onDisconnect().remove();
 }
 </script>
