@@ -358,8 +358,16 @@ const FALLBACK_LOGO='https://placehold.co/60x60/1a1a22/ffd700?text=TV';
 const RECENT_KEY='saif_recent_v2',NAME_KEY='saif_username';
 let allChannels=[],currentCat='all',activeChannel=null,hlsInstance=null;
 let userName=localStorage.getItem(NAME_KEY);
-let onlineNodeRef=null,chPresNodeRef=null;
+let onlineNodeRef=null,chPresNodeRef=null,channelBadgeTimer=null;
 let chatRef=null,chatListener=null,viewerRef=null;
+
+function showChannelBadge(name){
+  const badge=document.getElementById('channelBadge');
+  document.getElementById('badgeName').textContent=name;
+  badge.style.display='flex';
+  clearTimeout(channelBadgeTimer);
+  channelBadgeTimer=setTimeout(()=>{badge.style.display='none';},3000);
+}
 
 document.getElementById('nameInput').addEventListener('keypress',e=>{if(e.key==='Enter')submitName();});
 
@@ -536,12 +544,12 @@ function playChannel(encUrl,encName,encLogo){
   if(Hls.isSupported()){
     hlsInstance=new Hls({enableWorker:true,lowLatencyMode:true});
     hlsInstance.loadSource(url);hlsInstance.attachMedia(video);
-    hlsInstance.on(Hls.Events.MANIFEST_PARSED,()=>{spinner.style.display='none';banner.style.display='none';video.style.display='block';badge.style.display='flex';document.getElementById('badgeName').textContent=name;video.play().catch(()=>{});});
+    hlsInstance.on(Hls.Events.MANIFEST_PARSED,()=>{spinner.style.display='none';banner.style.display='none';video.style.display='block';showChannelBadge(name);video.play().catch(()=>{});});
     hlsInstance.on(Hls.Events.ERROR,(_,data)=>{if(data.fatal){spinner.style.display='none';idleUI.style.display='flex';banner.style.display='flex';errEl.style.display='block';}});
   }else if(video.canPlayType('application/vnd.apple.mpegurl')){
-    video.src=url;video.onloadedmetadata=()=>{spinner.style.display='none';banner.style.display='none';video.style.display='block';badge.style.display='flex';document.getElementById('badgeName').textContent=name;video.play().catch(()=>{});};
+    video.src=url;video.onloadedmetadata=()=>{spinner.style.display='none';banner.style.display='none';video.style.display='block';showChannelBadge(name);video.play().catch(()=>{});};
   }else{
-    video.src=url;banner.style.display='none';video.style.display='block';video.play().catch(()=>{});spinner.style.display='none';badge.style.display='flex';document.getElementById('badgeName').textContent=name;
+    video.src=url;banner.style.display='none';video.style.display='block';video.play().catch(()=>{});spinner.style.display='none';showChannelBadge(name);
   }
   setupChat(name);setChannelPresence(name);
 }
