@@ -371,7 +371,6 @@ function showChannelBadge(name){
 
 document.getElementById('nameInput').addEventListener('keypress',e=>{if(e.key==='Enter')submitName();});
 
-// ===== DEBUG BANNER (shows real Firebase errors on-screen, top of page, stays until dismissed) =====
 function showDebugError(msg){
   console.error('[Firebase]',msg);
   let b=document.getElementById('fbDebugBanner');
@@ -391,21 +390,19 @@ function showDebugError(msg){
   b.style.display='block';
 }
 
-// One-time Firebase connectivity self-test — runs once per page load, proves whether read/write actually work
 function testFirebaseConnection(){
   const testRef=db.ref('_connTest/'+Date.now());
   testRef.set({ok:true,ts:firebase.database.ServerValue.TIMESTAMP})
     .then(()=>testRef.once('value'))
     .then(snap=>{
       if(snap.exists()){testRef.remove().catch(()=>{});}
-      else{showDebugError('Connection test: WRITE worked but READ-back returned nothing. Check the .read rule for your Realtime Database.');}
+      else{showDebugError('Connection test: WRITE worked but READ-back returned nothing. Check database rules.');}
     })
     .catch(e=>{
-      showDebugError('Connection test FAILED: '+e.message+' — go to Firebase Console > Realtime Database > Rules, confirm the rules are actually Published (not just saved/drafted), and that the databaseURL in the code matches the URL shown at the top of that page.');
+      showDebugError('Connection test FAILED: '+e.message+' — Check your Firebase database rules.');
     });
 }
 
-// Counts a visit exactly once per browser session (not on every reconnect)
 function countVisitOnce(){
   if(sessionStorage.getItem('saif_visit_counted'))return;
   sessionStorage.setItem('saif_visit_counted','1');
@@ -413,7 +410,7 @@ function countVisitOnce(){
     if(err)showDebugError('visitor count failed: '+err.message);
   });
 }
-// Permanent activity log entry (never auto-deleted on disconnect)
+
 function logActivity(action){
   db.ref('activities').push({name:userName,action,ts:firebase.database.ServerValue.TIMESTAMP})
     .catch(e=>showDebugError('activity log failed: '+e.message));
@@ -445,6 +442,7 @@ function initFirebaseListeners(){
     onlineNodeRef.catch(e=>showDebugError('presence write failed: '+e.message));
     onlineNodeRef.onDisconnect().remove();
   },err=>showDebugError('connection listener failed: '+err.message));
+  
   db.ref('online').on('value',snap=>{
     const c=snap.numChildren();
     document.getElementById('onlineBadge').textContent=c+' Online';
@@ -454,17 +452,20 @@ function initFirebaseListeners(){
     const list=[];snap.forEach(ch=>{if(ch.val()?.name)list.push(ch.val().name);});
     document.getElementById('adOnlineList').innerHTML=list.length?list.map(n=>`<span class="online-name">${n}</span>`).join(''):'<span style="color:rgba(255,255,255,.2);font-size:.72rem;">কেউ নেই</span>';
   },err=>showDebugError('online read failed: '+err.message));
+  
   db.ref('stats/totalVisitors').on('value',snap=>{
     const v=snap.val()||0;
     document.getElementById('totalVisitors').textContent=v;
     document.getElementById('adTotal').textContent=v.toLocaleString();
   },err=>showDebugError('stats read failed: '+err.message));
+  
   db.ref('activities').limitToLast(20).on('value',snap=>{
     const acts=[];snap.forEach(c=>{if(c.val())acts.push(c.val());});acts.reverse();
     const cont=document.getElementById('adActivities');
     if(!acts.length){cont.innerHTML='<span style="color:rgba(255,255,255,.2);font-size:.72rem;">কোনো activity নেই</span>';return;}
     cont.innerHTML=acts.map(a=>`<div class="act-row"><div class="act-avatar">${(a.name||'?')[0].toUpperCase()}</div><span class="act-text"><strong>${a.name||'?'}</strong> ${a.action||''}</span>${a.ts?`<span class="act-time">${new Date(a.ts).toLocaleTimeString('bn-BD',{hour:'2-digit',minute:'2-digit'})}</span>`:''}</div>`).join('');
   },err=>showDebugError('activities read failed: '+err.message));
+  
   db.ref('chat').on('value',snap=>{
     let total=0;const counts={};
     snap.forEach(ch=>{counts[ch.key]=ch.numChildren();total+=ch.numChildren();});
@@ -474,6 +475,7 @@ function initFirebaseListeners(){
     if(!entries.length){cont.innerHTML='<span style="color:rgba(255,255,255,.2);font-size:.72rem;">কোনো চ্যাট নেই</span>';return;}
     cont.innerHTML=entries.map(([k,v])=>`<div style="background:var(--card2);border-radius:10px;padding:9px;display:flex;align-items:center;justify-content:space-between;"><span style="font-size:.65rem;color:rgba(255,255,255,.55);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:6px;">${k.replace(/_/g,' ')}</span><span style="color:var(--gold);font-size:.75rem;font-weight:900;">${v}</span></div>`).join('');
   },err=>showDebugError('chat stats read failed: '+err.message));
+  
   db.ref('channelViewers').on('value',snap=>{
     const stats=[];snap.forEach(ch=>stats.push({name:ch.key.replace(/_/g,' '),viewers:ch.numChildren()}));
     stats.sort((a,b)=>b.viewers-a.viewers);
@@ -581,8 +583,10 @@ function renderRecent(){
 }
 renderRecent();
 
+// ===== চ্যাট কি (Chat Key) ফিক্স করা ফাংশনসমূহ =====
 function setupChat(channelName){
-  const key=channelName.replace(/[.#$[\]/]/g,'_');
+  // স্পেস এবং বাকি সব স্পেশাল ক্যারেক্টারকে সুরক্ষিত আন্ডারস্কোরে রূপান্তর করা হচ্ছে
+  const key=channelName.trim().replace(/[\s.#$[\]/]/g,'_');
   document.getElementById('chatChannelName').textContent=channelName;
   document.getElementById('chatForm').style.display='flex';
   document.getElementById('chatPlaceholder').style.display='none';
@@ -606,7 +610,8 @@ function sendChat(e){
   e.preventDefault();
   const inp=document.getElementById('chatInput'),text=inp.value.trim();
   if(!text||!activeChannel)return;
-  const key=activeChannel.name.replace(/[.#$[\]/]/g,'_');
+  // এখানেও ডাটাবেজ পাথের সমতা বজায় রাখতে স্পেসকে আন্ডারস্কোর করা হলো
+  const key=activeChannel.name.trim().replace(/[\s.#$[\]/]/g,'_');
   db.ref(`chat/${key}`).push({name:userName,text,ts:firebase.database.ServerValue.TIMESTAMP})
     .catch(e=>showDebugError('chat send failed: '+e.message));
   inp.value='';
@@ -616,7 +621,7 @@ function esc(s){const d=document.createElement('div');d.textContent=s;return d.i
 
 function setChannelPresence(channelName){
   if(chPresNodeRef){chPresNodeRef.remove();chPresNodeRef=null;}
-  const key=channelName.replace(/[.#$[\]/]/g,'_');
+  const key=channelName.trim().replace(/[\s.#$[\]/]/g,'_');
   chPresNodeRef=db.ref(`channelViewers/${key}`).push({name:userName,ts:firebase.database.ServerValue.TIMESTAMP});
   chPresNodeRef.catch(e=>showDebugError('channel presence failed: '+e.message));
   chPresNodeRef.onDisconnect().remove();
