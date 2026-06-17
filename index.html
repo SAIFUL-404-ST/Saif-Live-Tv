@@ -371,21 +371,38 @@ function showChannelBadge(name){
 
 document.getElementById('nameInput').addEventListener('keypress',e=>{if(e.key==='Enter')submitName();});
 
-// ===== DEBUG BANNER (shows real Firebase errors on-screen so they're visible on mobile) =====
-let debugBannerTimeout;
+// ===== DEBUG BANNER (shows real Firebase errors on-screen, top of page, stays until dismissed) =====
 function showDebugError(msg){
   console.error('[Firebase]',msg);
   let b=document.getElementById('fbDebugBanner');
   if(!b){
     b=document.createElement('div');
     b.id='fbDebugBanner';
-    b.style.cssText='position:fixed;bottom:10px;left:10px;right:10px;z-index:9999;background:#7f1d1d;color:#fff;padding:10px 14px;border-radius:10px;font-size:.7rem;line-height:1.4;box-shadow:0 6px 20px rgba(0,0,0,.5);';
-    document.body.appendChild(b);
+    b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;background:#7f1d1d;color:#fff;padding:12px 40px 12px 14px;font-size:.72rem;line-height:1.5;box-shadow:0 4px 14px rgba(0,0,0,.5);';
+    const close=document.createElement('span');
+    close.textContent='✕';
+    close.style.cssText='position:absolute;top:8px;right:12px;cursor:pointer;font-weight:900;padding:4px;';
+    close.onclick=()=>{b.style.display='none';};
+    b.appendChild(close);
+    document.body.insertBefore(b,document.body.firstChild);
   }
-  b.textContent='⚠️ Firebase error: '+msg;
+  const textNode=document.createTextNode('⚠️ '+msg+'  ');
+  b.insertBefore(textNode,b.firstChild);
   b.style.display='block';
-  clearTimeout(debugBannerTimeout);
-  debugBannerTimeout=setTimeout(()=>{b.style.display='none';},10000);
+}
+
+// One-time Firebase connectivity self-test — runs once per page load, proves whether read/write actually work
+function testFirebaseConnection(){
+  const testRef=db.ref('_connTest/'+Date.now());
+  testRef.set({ok:true,ts:firebase.database.ServerValue.TIMESTAMP})
+    .then(()=>testRef.once('value'))
+    .then(snap=>{
+      if(snap.exists()){testRef.remove().catch(()=>{});}
+      else{showDebugError('Connection test: WRITE worked but READ-back returned nothing. Check the .read rule for your Realtime Database.');}
+    })
+    .catch(e=>{
+      showDebugError('Connection test FAILED: '+e.message+' — go to Firebase Console > Realtime Database > Rules, confirm the rules are actually Published (not just saved/drafted), and that the databaseURL in the code matches the URL shown at the top of that page.');
+    });
 }
 
 // Counts a visit exactly once per browser session (not on every reconnect)
@@ -411,13 +428,13 @@ function submitName(){
   document.getElementById('nameModal').style.display='none';
   document.getElementById('app').style.display='block';
   document.getElementById('welcomeUser').innerHTML=`স্বাগতম, <strong>${val}</strong>`;
-  initFirebaseListeners();countVisitOnce();logActivity('visited');loadM3U();
+  initFirebaseListeners();countVisitOnce();logActivity('visited');testFirebaseConnection();loadM3U();
 }
 if(userName){
   document.getElementById('nameModal').style.display='none';
   document.getElementById('app').style.display='block';
   document.getElementById('welcomeUser').innerHTML=`স্বাগতম, <strong>${userName}</strong>`;
-  initFirebaseListeners();countVisitOnce();logActivity('visited');loadM3U();
+  initFirebaseListeners();countVisitOnce();logActivity('visited');testFirebaseConnection();loadM3U();
 }
 
 function initFirebaseListeners(){
